@@ -327,10 +327,16 @@ public class MapperService {
         }
         // Filter out all aliases which name already exists as field in index mappings
         List<String> nonAliasIndexFields = MapperUtils.getAllNonAliasFieldsFromIndex(indexMappingMetadata);
+        // Filter out aliases already present in the index as alias fields — re-applying them is a no-op
+        // and causes PutMapping failures when the alias path has since diverged from what is stored.
+        Set<String> existingAliasFields = MapperUtils.getAllAliasPathPairs(indexMappingMetadata).stream()
+                .map(Pair::getLeft)
+                .collect(Collectors.toSet());
         List<String> aliasFields = MapperUtils.getAllAliases(aliasMappingsJSON);
         Set<String> aliasesToInclude =
                 aliasFields.stream()
                         .filter(e -> nonAliasIndexFields.contains(e) == false)
+                        .filter(e -> existingAliasFields.contains(e) == false)
                         .collect(Collectors.toSet());
 
         boolean excludeSomeAliases = aliasesToInclude.size() < aliasFields.size();
