@@ -28,9 +28,6 @@ buildscript {
         plugin_no_snapshot = opensearch_build
         opensearch_no_snapshot = opensearch_version.replace("-SNAPSHOT","")
         sa_commons_version = '1.0.0'
-        if (buildVersionQualifier) {
-            opensearch_build += "-${buildVersionQualifier}"
-        }
 
         alerting_spi_build = opensearch_build
         if (isSnapshot) {
