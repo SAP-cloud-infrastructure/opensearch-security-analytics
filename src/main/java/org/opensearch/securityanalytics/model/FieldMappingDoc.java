@@ -58,7 +58,8 @@ public class FieldMappingDoc implements ToXContent, Writeable {
 
     public FieldMappingDoc(StreamInput sin) throws IOException {
         this.rawField = sin.readString();
-        this.schemaFields = sin.readMap(StreamInput::readString, StreamInput::readString);
+        this.schemaFields = new HashMap<>(sin.readMap(StreamInput::readString, StreamInput::readString));
+        this.logTypes = new HashSet<>();
         Collections.addAll(this.logTypes, sin.readStringArray());
     }
 
