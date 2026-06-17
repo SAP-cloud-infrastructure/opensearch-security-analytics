@@ -29,15 +29,25 @@ buildscript {
         opensearch_no_snapshot = opensearch_version.replace("-SNAPSHOT","")
         sa_commons_version = '1.0.0'
 
+        // upstream_build tracks the plain OpenSearch version (no SCI qualifier) for
+        // resolving upstream artifacts like common-utils that don't carry our qualifier.
+        upstream_build = opensearch_build
+
+        if (buildVersionQualifier) {
+            opensearch_build += "-${buildVersionQualifier}"
+            plugin_no_snapshot += "-${buildVersionQualifier}"
+        }
+
         alerting_spi_build = opensearch_build
         if (isSnapshot) {
             alerting_spi_build += "-SNAPSHOT"
             opensearch_build += "-SNAPSHOT"
+            upstream_build += "-SNAPSHOT"
 
             // TODO consider enabling snapshot options once SA commons is published to maven central
 //            sa_commons_version += "-SNAPSHOT"
         }
-        common_utils_version = System.getProperty("common_utils.version", opensearch_build)
+        common_utils_version = System.getProperty("common_utils.version", upstream_build)
         kotlin_version = '1.8.21'
 
         sa_commons_file_name = "security-analytics-commons-${sa_commons_version}.jar"
@@ -205,7 +215,7 @@ dependencies {
     compileOnly "org.opensearch:common-utils:${common_utils_version}@jar"
     compileOnly "org.opensearch.client:opensearch-rest-client:${opensearch_version}"
     compileOnly "org.jetbrains.kotlin:kotlin-stdlib:${kotlin_version}"
-    compileOnly "org.opensearch:opensearch-job-scheduler-spi:${opensearch_build}"
+    compileOnly "org.opensearch:opensearch-job-scheduler-spi:${upstream_build}"
     compileOnly "org.opensearch.alerting:alerting-spi:${alerting_spi_build}"
     implementation "org.apache.commons:commons-csv:1.10.0"
     implementation 'com.jayway.jsonpath:json-path:2.9.0'
@@ -233,15 +243,15 @@ dependencies {
     compileOnly 'software.amazon.awssdk:annotations:2.25.42'
 
     // Needed for integ tests
-    zipArchive group: 'org.opensearch.plugin', name:'alerting', version: "${opensearch_build}"
-    zipArchive group: 'org.opensearch.plugin', name:'opensearch-notifications-core', version: "${opensearch_build}"
-    zipArchive group: 'org.opensearch.plugin', name:'notifications', version: "${opensearch_build}"
-    zipArchive group: 'org.opensearch.plugin', name:'opensearch-job-scheduler', version: "${opensearch_build}"
+    zipArchive group: 'org.opensearch.plugin', name:'alerting', version: "${upstream_build}"
+    zipArchive group: 'org.opensearch.plugin', name:'opensearch-notifications-core', version: "${upstream_build}"
+    zipArchive group: 'org.opensearch.plugin', name:'notifications', version: "${upstream_build}"
+    zipArchive group: 'org.opensearch.plugin', name:'opensearch-job-scheduler', version: "${upstream_build}"
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
 
     // Needed for security tests
     if (securityEnabled) {
-        opensearchPlugin "org.opensearch.plugin:opensearch-security:${opensearch_build}@zip"
+        opensearchPlugin "org.opensearch.plugin:opensearch-security:${upstream_build}@zip"
     }
 }
 
