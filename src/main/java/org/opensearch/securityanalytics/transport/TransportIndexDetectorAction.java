@@ -854,29 +854,30 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
         List<DocLevelQuery> docLevelQueries = new ArrayList<>();
         String monitorName = detector.getName() + "_chained_findings";
         String actualQuery = "_id:*";
-        Set<String> tags = new HashSet<>();
+
+        // Create one DocLevelQuery per aggregation rule instead of a single merged query.
+        // This allows trigger conditions (query[tag=ruleId]) to resolve only to the docs
+        // from that specific rule's bucket-level finding, so triggers for rules that didn't
+        // fire return an empty set and produce no alert.
+        List<String> queryFieldNames = List.of("_id");
         for (Pair<String, Rule> query: queries) {
-            if(query.getRight().isAggregationRule()) {
+            if (query.getRight().isAggregationRule()) {
                 Rule rule = query.getRight();
-                tags.add(rule.getLevel());
-                tags.add(rule.getId());
-                tags.add(rule.getCategory());
-                tags.addAll(rule.getTags().stream().map(Value::getValue).collect(Collectors.toList()));
+                List<String> ruleTags = new ArrayList<>();
+                if (rule.getLevel() != null) ruleTags.add(rule.getLevel());
+                ruleTags.add(rule.getId());
+                if (rule.getCategory() != null) ruleTags.add(rule.getCategory());
+                rule.getTags().stream().map(Value::getValue).filter(Objects::nonNull).forEach(ruleTags::add);
+                docLevelQueries.add(new DocLevelQuery(
+                        rule.getId(),
+                        rule.getId() + "doc",
+                        Collections.emptyList(),
+                        actualQuery,
+                        ruleTags,
+                        queryFieldNames
+                ));
             }
         }
-        tags.removeIf(Objects::isNull);
-
-        // if queryFieldNames is not passed, alerting doc-level monitor fetches entire log doc.
-        List<String> queryFieldNames = List.of("_id");
-        DocLevelQuery docLevelQuery = new DocLevelQuery(
-                monitorName,
-                monitorName + "doc",
-                Collections.emptyList(),
-                actualQuery,
-                new ArrayList<>(tags),
-                queryFieldNames
-        );
-        docLevelQueries.add(docLevelQuery);
 
         DocLevelMonitorInput docLevelMonitorInput = new DocLevelMonitorInput(detector.getName(), detector.getInputs().get(0).getIndices(), docLevelQueries, false);
         docLevelMonitorInputs.add(docLevelMonitorInput);
