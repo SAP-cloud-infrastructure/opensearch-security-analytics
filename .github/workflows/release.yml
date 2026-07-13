@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build and release from'
+        required: true
+        type: string
+      version:
+        description: 'OpenSearch version (e.g. 3.7)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Determine next SCI version qualifier
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          BASE_TAG="${VERSION}.0.0"
+
+          # Fetch all existing release tags matching this base version
+          EXISTING=$(gh release list --limit 100 --repo "${{ github.repository }}" \
+            --json tagName --jq '.[].tagName' \
+            | grep -E "^${BASE_TAG}-sci-v[0-9]+$" || true)
+
+          if [ -z "$EXISTING" ]; then
+            NEXT_N=1
+          else
+            MAX_N=$(echo "$EXISTING" \
+              | sed "s/^${BASE_TAG}-sci-v//" \
+              | sort -n \
+              | tail -1)
+            NEXT_N=$((MAX_N + 1))
+          fi
+
+          QUALIFIER="sci-v${NEXT_N}"
+          TAG="${BASE_TAG}-${QUALIFIER}"
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "qualifier=${QUALIFIER}" >> "$GITHUB_OUTPUT"
+          echo "opensearch_version=${VERSION}.0" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG}"
+
+      - name: Build plugin zip
+        run: |
+          ./gradlew bundlePlugin \
+            -Dopensearch.version="${{ steps.tag.outputs.opensearch_version }}-SNAPSHOT" \
+            -Dbuild.version_qualifier="${{ steps.tag.outputs.qualifier }}" \
+            -Dbuild.snapshot=false
+
+      - name: Locate artifact
+        id: artifact
+        run: |
+          ZIP=$(ls build/distributions/*.zip | head -1)
+          echo "path=${ZIP}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename ${ZIP})" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release and upload artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ inputs.branch }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes "Release ${{ steps.tag.outputs.tag }} built from branch \`${{ inputs.branch }}\`." \
+            "${{ steps.artifact.outputs.path }}#${{ steps.artifact.outputs.name }}"
