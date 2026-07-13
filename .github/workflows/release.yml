@@ -11,6 +11,9 @@ on:
         description: 'OpenSearch version (e.g. 3.7)'
         required: true
         type: string
+  push:
+    tags:
+      - '*sci-v*'
 
 jobs:
   release:
@@ -19,10 +22,54 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout target branch
+      - name: Resolve parameters
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Tag push: derive branch and version from the tag name
+            # Expected tag format: {major}.{minor}.0.0-sci-v{N}
+            TAG="${GITHUB_REF_NAME}"
+            # Strip the -sci-v{N} suffix to get the base version
+            BASE="${TAG%-sci-v*}"
+            # Extract major.minor from {major}.{minor}.0.0
+            VERSION=$(echo "$BASE" | cut -d. -f1,2)
+            # Find the branch that contains this tag commit
+            BRANCH=$(git ls-remote --heads origin | grep "$(git rev-parse HEAD)" | sed 's|.*refs/heads/||' | head -1)
+            # Fall back to the default branch if commit is not a branch tip
+            [ -z "$BRANCH" ] && BRANCH="${{ github.event.repository.default_branch }}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "qualifier=${TAG##*-}" >> "$GITHUB_OUTPUT"
+            echo "opensearch_version=${VERSION}.0" >> "$GITHUB_OUTPUT"
+            echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "create_release=false" >> "$GITHUB_OUTPUT"
+          else
+            # Manual dispatch: compute next sci-vN tag as before
+            VERSION="${{ inputs.version }}"
+            BASE_TAG="${VERSION}.0.0"
+            EXISTING=$(gh release list --limit 100 --repo "${{ github.repository }}" \
+              --json tagName --jq '.[].tagName' \
+              | grep -E "^${BASE_TAG}-sci-v[0-9]+$" || true)
+            if [ -z "$EXISTING" ]; then
+              NEXT_N=1
+            else
+              MAX_N=$(echo "$EXISTING" | sed "s/^${BASE_TAG}-sci-v//" | sort -n | tail -1)
+              NEXT_N=$((MAX_N + 1))
+            fi
+            QUALIFIER="sci-v${NEXT_N}"
+            TAG="${BASE_TAG}-${QUALIFIER}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "qualifier=${QUALIFIER}" >> "$GITHUB_OUTPUT"
+            echo "opensearch_version=${VERSION}.0" >> "$GITHUB_OUTPUT"
+            echo "branch=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
+            echo "create_release=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ steps.params.outputs.branch }}
           fetch-depth: 0
 
       - name: Setup Java
@@ -31,42 +78,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Determine next SCI version qualifier
-        id: tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${{ inputs.version }}"
-          BASE_TAG="${VERSION}.0.0"
-
-          # Fetch all existing release tags matching this base version
-          EXISTING=$(gh release list --limit 100 --repo "${{ github.repository }}" \
-            --json tagName --jq '.[].tagName' \
-            | grep -E "^${BASE_TAG}-sci-v[0-9]+$" || true)
-
-          if [ -z "$EXISTING" ]; then
-            NEXT_N=1
-          else
-            MAX_N=$(echo "$EXISTING" \
-              | sed "s/^${BASE_TAG}-sci-v//" \
-              | sort -n \
-              | tail -1)
-            NEXT_N=$((MAX_N + 1))
-          fi
-
-          QUALIFIER="sci-v${NEXT_N}"
-          TAG="${BASE_TAG}-${QUALIFIER}"
-
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "qualifier=${QUALIFIER}" >> "$GITHUB_OUTPUT"
-          echo "opensearch_version=${VERSION}.0" >> "$GITHUB_OUTPUT"
-          echo "Resolved tag: ${TAG}"
-
       - name: Build plugin zip
         run: |
           ./gradlew bundlePlugin \
-            -Dopensearch.version="${{ steps.tag.outputs.opensearch_version }}-SNAPSHOT" \
-            -Dbuild.version_qualifier="${{ steps.tag.outputs.qualifier }}" \
+            -Dopensearch.version="${{ steps.params.outputs.opensearch_version }}-SNAPSHOT" \
+            -Dbuild.version_qualifier="${{ steps.params.outputs.qualifier }}" \
             -Dbuild.snapshot=false
 
       - name: Locate artifact
@@ -77,12 +93,23 @@ jobs:
           echo "name=$(basename ${ZIP})" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release and upload artifact
+        if: steps.params.outputs.create_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" \
+          gh release create "${{ steps.params.outputs.tag }}" \
             --repo "${{ github.repository }}" \
-            --target "${{ inputs.branch }}" \
-            --title "${{ steps.tag.outputs.tag }}" \
-            --notes "Release ${{ steps.tag.outputs.tag }} built from branch \`${{ inputs.branch }}\`." \
+            --target "${{ steps.params.outputs.branch }}" \
+            --title "${{ steps.params.outputs.tag }}" \
+            --notes "Release ${{ steps.params.outputs.tag }} built from branch \`${{ steps.params.outputs.branch }}\`." \
             "${{ steps.artifact.outputs.path }}#${{ steps.artifact.outputs.name }}"
+
+      - name: Upload artifact to existing release
+        if: steps.params.outputs.create_release == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.params.outputs.tag }}" \
+            "${{ steps.artifact.outputs.path }}#${{ steps.artifact.outputs.name }}" \
+            --repo "${{ github.repository }}" \
+            --clobber
