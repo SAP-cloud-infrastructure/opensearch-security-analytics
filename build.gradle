@@ -38,7 +38,7 @@ buildscript {
             plugin_no_snapshot += "-${buildVersionQualifier}"
         }
 
-        alerting_spi_build = opensearch_build
+        alerting_spi_build = upstream_build
         if (isSnapshot) {
             alerting_spi_build += "-SNAPSHOT"
             opensearch_build += "-SNAPSHOT"
