@@ -61,9 +61,7 @@ public class DetectorMonitorConfig {
 
     public static Map<String, Map<String, String>> getRuleIndexMappingsByType() {
         HashMap<String, String> properties = new HashMap<>();
-        // rule_analyzer (with rule_ws_filter) is kept during transition: Phase 1 emit sites now
-        // use backslash-escaped spaces instead of _ws_ tokens, so this filter is dormant but
-        // retained for backward compatibility until a Phase 2 re-index migration.
+        // rule_ws_filter is dormant after this fix but kept for backward compatibility.
         properties.put("analyzer", "rule_analyzer");
         HashMap<String, Map<String, String>> fieldMappingProperties = new HashMap<>();
         fieldMappingProperties.put("text", properties);
