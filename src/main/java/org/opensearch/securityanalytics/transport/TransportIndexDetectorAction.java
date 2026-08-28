@@ -1009,6 +1009,11 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                     .seqNoAndPrimaryTerm(true)
                     .version(true)
                     // Build query string filter
+                    // NOTE (Phase 1 whitespace fix): The generated query uses escape-time backslash escaping
+                    // for spaces (e.g., "field: *foo\ bar*"), NOT the _ws_ token scheme. This is intentional
+                    // because this query runs against the customer ingest index which has no rule_ws_filter
+                    // char_filter. The _ws_ token is only relevant for the doc-level monitor path where
+                    // rule_analyzer is applied.
                     .query(QueryBuilders.queryStringQuery(rule.getQueries().get(0).getValue()))
                     .aggregation(aggregationQueries.getAggBuilder());
             // input index can also be an index pattern or alias so we have to resolve it to concrete index

@@ -124,7 +124,7 @@ public class OSQueryBackend extends QueryBackend {
         this.escapeChar = "\\";
         this.wildcardMulti = "*";
         this.wildcardSingle = "?";
-        this.addEscaped = "/:\\+-=><!(){}[]^\"~*?";
+        this.addEscaped = "/:\\+-=><!(){}[]^\"~*? ";
         this.addReserved = "&& ||";
         this.eqToken = ":";
         this.strQuote = "\"";

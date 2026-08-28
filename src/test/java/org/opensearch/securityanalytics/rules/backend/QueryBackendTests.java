@@ -87,6 +87,55 @@ public class QueryBackendTests extends OpenSearchTestCase {
         Assert.assertEquals("mappedA: \"value\"", queries.get(0).toString());
     }
 
+    public void testConvertValueStrContainsWithWhitespace() throws IOException, SigmaError, CompositeSigmaErrors {
+        OSQueryBackend queryBackend = testBackend();
+        List<Object> queries = queryBackend.convertRule(SigmaRule.fromYaml(
+                "            title: Test\n" +
+                        "            id: 39f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
+                        "            status: test\n" +
+                        "            level: critical\n" +
+                        "            description: Detects QuarksPwDump clearing access history in hive\n" +
+                        "            author: Florian Roth\n" +
+                        "            date: 2017/05/15\n" +
+                        "            logsource:\n" +
+                        "                category: test_category\n" +
+                        "                product: test_product\n" +
+                        "            detection:\n" +
+                        "                sel:\n" +
+                        "                    fieldA1|contains: This is an example\n" +
+                        "                condition: sel", false));
+        String query = queries.get(0).toString();
+        // Wildcard (contains) terms bypass the rule_analyzer, so the _ws_ char_filter never
+        // decodes them. Spaces must be escaped for the query_string parser instead of encoded as _ws_.
+        Assert.assertFalse("Wildcard query must not contain the _ws_ whitespace token: " + query, query.contains("_ws_"));
+        Assert.assertEquals("mappedA: *This\\ is\\ an\\ example*", query);
+    }
+
+    public void testConvertValueStrWithWhitespaceQuoted() throws IOException, SigmaError, CompositeSigmaErrors {
+        OSQueryBackend queryBackend = testBackend();
+        List<Object> queries = queryBackend.convertRule(SigmaRule.fromYaml(
+                "            title: Test\n" +
+                        "            id: 39f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
+                        "            status: test\n" +
+                        "            level: critical\n" +
+                        "            description: Detects QuarksPwDump clearing access history in hive\n" +
+                        "            author: Florian Roth\n" +
+                        "            date: 2017/05/15\n" +
+                        "            logsource:\n" +
+                        "                category: test_category\n" +
+                        "                product: test_product\n" +
+                        "            detection:\n" +
+                        "                sel:\n" +
+                        "                    fieldA1: This is an example\n" +
+                        "                condition: sel", false));
+        String query = queries.get(0).toString();
+        // Non-wildcard (quoted) terms: Phase 1 moves ALL emit sites to backslash-escaped spaces.
+        // The rule_analyzer/rule_ws_filter is kept for backward compatibility but is now dormant
+        // (query_string parser resolves \  to a literal space before analysis).
+        Assert.assertFalse("Quoted query must not contain the _ws_ whitespace token: " + query, query.contains("_ws_"));
+        Assert.assertEquals("mappedA: \"This\\ is\\ an\\ example\"", query);
+    }
+
     public void testConvertValueStrStartsWith() throws IOException, SigmaError, CompositeSigmaErrors {
         OSQueryBackend queryBackend = testBackend();
         List<Object> queries = queryBackend.convertRule(SigmaRule.fromYaml(
@@ -765,8 +814,8 @@ public class QueryBackendTests extends OpenSearchTestCase {
                         "                        - 'igfxCPL.cpl'\n" +
                         "                condition: selection1 and not filter and not fp1_igfx", false));
         Assert.assertEquals("((CommandLine: *.cpl) AND ((((NOT CommandLine: *\\\\System32\\\\* AND _exists_: CommandLine) AND " +
-                "(NOT CommandLine: *%System%* AND _exists_: CommandLine))))) AND ((((NOT CommandLine: *regsvr32_ws_* AND _exists_: CommandLine) OR " +
-                "(NOT CommandLine: *_ws_\\/s_ws_* AND _exists_: CommandLine) OR (NOT CommandLine: *igfxCPL.cpl* AND _exists_: CommandLine))))", queries.get(0).toString());
+                "(NOT CommandLine: *%System%* AND _exists_: CommandLine))))) AND ((((NOT CommandLine: *regsvr32\\ * AND _exists_: CommandLine) OR " +
+                "(NOT CommandLine: *\\ \\/s\\ * AND _exists_: CommandLine) OR (NOT CommandLine: *igfxCPL.cpl* AND _exists_: CommandLine))))", queries.get(0).toString());
     }
 
     public void testConvertNotWithAnd() throws IOException, SigmaError, CompositeSigmaErrors {
@@ -1146,6 +1195,54 @@ public class QueryBackendTests extends OpenSearchTestCase {
                             "                        - ''\n" +
                             "                condition: sel", false));
         });
+    }
+
+    public void testConvertValueRegexWithWhitespace() throws IOException, SigmaError, CompositeSigmaErrors {
+        OSQueryBackend queryBackend = testBackend();
+        List<Object> queries = queryBackend.convertRule(SigmaRule.fromYaml(
+                "            title: Test\n" +
+                        "            id: 39f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
+                        "            status: test\n" +
+                        "            level: critical\n" +
+                        "            description: Regex with whitespace test\n" +
+                        "            author: Test\n" +
+                        "            date: 2024/01/01\n" +
+                        "            logsource:\n" +
+                        "                category: test_category\n" +
+                        "                product: test_product\n" +
+                        "            detection:\n" +
+                        "                sel:\n" +
+                        "                    fieldA1|re: 'This is a pattern'\n" +
+                        "                condition: sel", false));
+        String query = queries.get(0).toString();
+        // Regex terms bypass the analyzer pipeline; spaces are stored and emitted as literal
+        // characters in Lucene regexp syntax (/.../). No _ws_ encoding and no backslash escaping
+        // needed: space is not a metacharacter in Lucene regexp.
+        Assert.assertFalse("Regex query must not contain the _ws_ whitespace token: " + query, query.contains("_ws_"));
+        Assert.assertEquals("mappedA: /This is a pattern/", query);
+    }
+
+    public void testBucketLevelQueryContainsNoWsToken() throws IOException, SigmaError, CompositeSigmaErrors {
+        OSQueryBackend queryBackend = testBackend();
+        List<Object> queries = queryBackend.convertRule(SigmaRule.fromYaml(
+                "            title: Test\n" +
+                        "            id: 39f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
+                        "            status: test\n" +
+                        "            level: critical\n" +
+                        "            description: Bucket-level _ws_ leak check\n" +
+                        "            author: Test\n" +
+                        "            date: 2024/01/01\n" +
+                        "            logsource:\n" +
+                        "                category: test_category\n" +
+                        "                product: test_product\n" +
+                        "            detection:\n" +
+                        "                sel:\n" +
+                        "                    fieldA1|contains: this is a test\n" +
+                        "                condition: sel", false));
+        String query = queries.get(0).toString();
+        // Bucket-level path runs queryStringQuery against the customer ingest index
+        // which has NO rule_ws_filter. _ws_ must never appear in the generated query.
+        Assert.assertFalse("Generated query must not contain _ws_ token for bucket-level path: " + query, query.contains("_ws_"));
     }
 
     private OSQueryBackend testBackend() throws IOException {

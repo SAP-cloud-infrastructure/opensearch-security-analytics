@@ -1905,4 +1905,155 @@ public class DetectorRestApiIT extends SecurityAnalyticsRestTestCase {
         Response deleteResponse = makeRequest(client(), "DELETE", SecurityAnalyticsPlugin.DETECTOR_BASE_URI + "/" + detectorId, Collections.emptyMap(), null);
         Assert.assertEquals("Delete detector failed", RestStatus.OK, restStatus(deleteResponse));
     }
+
+    /**
+     * Integration test for Phase 1 whitespace escaping fix (CCLOUDSRC-1237).
+     *
+     * Verifies that SIGMA rules with space-containing values match correctly on the
+     * doc-level monitor path. Both the wildcard (contains) and quoted (exact) paths
+     * are tested. Previously the _ws_ token scheme caused wildcard queries to fail
+     * because wildcard terms bypass the rule_analyzer char_filter.
+     *
+     * Cannot run without a live OpenSearch cluster — compile-verified only in local mode.
+     */
+    public void testDetectorWithWhitespaceRuleContainsPath() throws IOException {
+        // Use the standard windows index which has CommandLine as a text field.
+        String index = createTestIndex(randomIndex(), windowsIndexMapping());
+
+        Request createMappingRequest = new Request("POST", SecurityAnalyticsPlugin.MAPPER_BASE_URI);
+        createMappingRequest.setJsonEntity(
+                "{ \"index_name\":\"" + index + "\"," +
+                        "  \"rule_topic\":\"" + randomDetectorType() + "\", " +
+                        "  \"partial\":true" +
+                        "}"
+        );
+        Response mappingResponse = client().performRequest(createMappingRequest);
+        assertEquals(HttpStatus.SC_OK, mappingResponse.getStatusLine().getStatusCode());
+
+        // SIGMA rule: contains modifier — wildcard path, bypasses rule_analyzer.
+        // Before the fix, "This is an example" was emitted as "This_ws_is_ws_an_ws_example"
+        // which never matched because wildcard queries skip the char_filter decode step.
+        String containsRule =
+                "title: Whitespace Contains Test\n" +
+                "id: 99f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
+                "status: test\n" +
+                "level: high\n" +
+                "description: Detects a CommandLine value containing a space\n" +
+                "author: Test\n" +
+                "date: 2024/01/01\n" +
+                "logsource:\n" +
+                "    product: windows\n" +
+                "    category: process_creation\n" +
+                "detection:\n" +
+                "    sel:\n" +
+                "        CommandLine|contains: 'This is an example'\n" +
+                "    condition: sel\n" +
+                "falsepositives:\n" +
+                "    - none\n";
+        String containsRuleId = createRule(containsRule);
+
+        // Only use our custom rule — no prepackaged rules — to keep finding counts deterministic.
+        DetectorInput input = new DetectorInput(
+                "whitespace test detector", List.of(index),
+                List.of(new DetectorRule(containsRuleId)),
+                Collections.emptyList()
+        );
+        Detector detector = randomDetectorWithInputs(List.of(input));
+        Response createResponse = makeRequest(client(), "POST", SecurityAnalyticsPlugin.DETECTOR_BASE_URI, Collections.emptyMap(), toHttpEntity(detector));
+        Assert.assertEquals("Create detector failed", RestStatus.CREATED, restStatus(createResponse));
+        Map<String, Object> responseBody = asMap(createResponse);
+
+        String detectorId = responseBody.get("_id").toString();
+        String request = "{\n" +
+                "   \"query\" : { \"match\":{ \"_id\": \"" + detectorId + "\" } }\n" +
+                "}";
+        List<SearchHit> hits = executeSearch(Detector.DETECTORS_INDEX, request);
+        SearchHit hit = hits.get(0);
+        String monitorId = ((List<String>) ((Map<String, Object>) hit.getSourceAsMap().get("detector")).get("monitor_id")).get(0);
+
+        // Positive doc: CommandLine contains the exact phrase with spaces → must fire.
+        indexDoc(index, "ws-positive", "{\"CommandLine\": \"run This is an example now\"}");
+        // Negative doc: spaces replaced with X → must NOT fire.
+        indexDoc(index, "ws-negative", "{\"CommandLine\": \"run ThisXisXanXexample now\"}");
+
+        Response executeResponse = executeAlertingMonitor(monitorId, Collections.emptyMap());
+        Map<String, Object> executeResults = entityAsMap(executeResponse);
+
+        // The doc-level monitor returns a map of docId → matched queries.
+        // Only ws-positive should appear; ws-negative must not.
+        Map<String, Object> results = ((List<Map<String, Object>>) ((Map<String, Object>) executeResults.get("input_results")).get("results")).get(0);
+        Assert.assertTrue("Positive doc (space in CommandLine) must produce a finding", results.containsKey("ws-positive"));
+        Assert.assertFalse("Negative doc (X instead of space) must NOT produce a finding", results.containsKey("ws-negative"));
+    }
+
+    /**
+     * Integration test for Phase 1 whitespace fix — quoted (exact-match) path.
+     *
+     * The quoted path uses rule_analyzer with rule_ws_filter. After Phase 1 the query
+     * now emits backslash-escaped spaces; the query_string parser resolves \  → space
+     * before analysis, so matching still works correctly.
+     */
+    public void testDetectorWithWhitespaceRuleQuotedPath() throws IOException {
+        String index = createTestIndex(randomIndex(), windowsIndexMapping());
+
+        Request createMappingRequest = new Request("POST", SecurityAnalyticsPlugin.MAPPER_BASE_URI);
+        createMappingRequest.setJsonEntity(
+                "{ \"index_name\":\"" + index + "\"," +
+                        "  \"rule_topic\":\"" + randomDetectorType() + "\", " +
+                        "  \"partial\":true" +
+                        "}"
+        );
+        Response mappingResponse = client().performRequest(createMappingRequest);
+        assertEquals(HttpStatus.SC_OK, mappingResponse.getStatusLine().getStatusCode());
+
+        // SIGMA rule: no wildcard modifier — quoted path, goes through rule_analyzer.
+        String quotedRule =
+                "title: Whitespace Quoted Test\n" +
+                "id: 88f919f3-980b-4e6f-a975-8af7e507ef2c\n" +
+                "status: test\n" +
+                "level: high\n" +
+                "description: Detects an exact CommandLine value containing spaces\n" +
+                "author: Test\n" +
+                "date: 2024/01/01\n" +
+                "logsource:\n" +
+                "    product: windows\n" +
+                "    category: process_creation\n" +
+                "detection:\n" +
+                "    sel:\n" +
+                "        CommandLine: 'This is an example'\n" +
+                "    condition: sel\n" +
+                "falsepositives:\n" +
+                "    - none\n";
+        String quotedRuleId = createRule(quotedRule);
+
+        DetectorInput input = new DetectorInput(
+                "whitespace quoted test detector", List.of(index),
+                List.of(new DetectorRule(quotedRuleId)),
+                Collections.emptyList()
+        );
+        Detector detector = randomDetectorWithInputs(List.of(input));
+        Response createResponse = makeRequest(client(), "POST", SecurityAnalyticsPlugin.DETECTOR_BASE_URI, Collections.emptyMap(), toHttpEntity(detector));
+        Assert.assertEquals("Create detector failed", RestStatus.CREATED, restStatus(createResponse));
+        Map<String, Object> responseBody = asMap(createResponse);
+
+        String detectorId = responseBody.get("_id").toString();
+        String searchRequest = "{\n" +
+                "   \"query\" : { \"match\":{ \"_id\": \"" + detectorId + "\" } }\n" +
+                "}";
+        List<SearchHit> hits = executeSearch(Detector.DETECTORS_INDEX, searchRequest);
+        SearchHit hit = hits.get(0);
+        String monitorId = ((List<String>) ((Map<String, Object>) hit.getSourceAsMap().get("detector")).get("monitor_id")).get(0);
+
+        // Positive: exact match.
+        indexDoc(index, "ws-q-positive", "{\"CommandLine\": \"This is an example\"}");
+        // Negative: X instead of spaces.
+        indexDoc(index, "ws-q-negative", "{\"CommandLine\": \"ThisXisXanXexample\"}");
+
+        Response executeResponse = executeAlertingMonitor(monitorId, Collections.emptyMap());
+        Map<String, Object> executeResults = entityAsMap(executeResponse);
+
+        Map<String, Object> results = ((List<Map<String, Object>>) ((Map<String, Object>) executeResults.get("input_results")).get("results")).get(0);
+        Assert.assertTrue("Positive doc (space in CommandLine) must produce a finding", results.containsKey("ws-q-positive"));
+        Assert.assertFalse("Negative doc (X instead of space) must NOT produce a finding", results.containsKey("ws-q-negative"));
+    }
 }

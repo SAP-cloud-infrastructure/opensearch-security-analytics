@@ -16,7 +16,10 @@ public class SigmaRegularExpression implements SigmaType {
     private String regexp;
 
     public SigmaRegularExpression(String regexp) throws SigmaRegularExpressionError {
-        this.regexp = regexp.replace(" ", "_ws_");
+        // Spaces are stored as-is: Lucene regexp syntax (used inside /.../  in query_string)
+        // treats space as a literal character with no escaping required. The old _ws_ encoding
+        // was incorrect because the rule_ws_filter char_filter is not applied to regex queries.
+        this.regexp = regexp;
         this.compile();
     }
 
