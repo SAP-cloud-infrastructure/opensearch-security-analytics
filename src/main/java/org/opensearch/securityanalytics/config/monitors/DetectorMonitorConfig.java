@@ -61,6 +61,7 @@ public class DetectorMonitorConfig {
 
     public static Map<String, Map<String, String>> getRuleIndexMappingsByType() {
         HashMap<String, String> properties = new HashMap<>();
+        // rule_ws_filter is dormant after this fix but kept for backward compatibility.
         properties.put("analyzer", "rule_analyzer");
         HashMap<String, Map<String, String>> fieldMappingProperties = new HashMap<>();
         fieldMappingProperties.put("text", properties);
