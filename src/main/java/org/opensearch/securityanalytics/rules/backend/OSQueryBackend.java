@@ -41,11 +41,14 @@ import org.opensearch.securityanalytics.rules.utils.Either;
 import org.apache.commons.lang3.NotImplementedException;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class OSQueryBackend extends QueryBackend {
     private String tokenSeparator;
@@ -291,11 +294,42 @@ public class OSQueryBackend extends QueryBackend {
     public Object convertConditionFieldEqValStr(ConditionFieldEqualsValueExpression condition, boolean applyDeMorgans) throws SigmaValueError {
         SigmaString value = (SigmaString) condition.getValue();
         boolean containsWildcard = value.containsWildcard();
-        String expr = "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
-        String exprWithDeMorgansApplied = this.notToken + " " + "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
 
         String field = getFinalField(condition.getField());
         ruleQueryFields.put(field, Map.of("type", "text", "analyzer", "rule_analyzer"));
+
+        // Values with spaces: emit phrase query (pure-whitespace separators) or escaped wildcard
+        // (mixed separators like path backslashes). See buildSpacedValueQuery for the distinction.
+        String spacedShape = spacedPhraseShape(value);
+        if (spacedShape != null) {
+            var parts = value.getsOpt();
+            String text;
+            String phraseExpr;
+            switch (spacedShape) {
+                case "contains":
+                    text = parts.get(1).getLeft();
+                    phraseExpr = buildSpacedValueQuery(field, text, true, true);
+                    break;
+                case "startswith":
+                    text = parts.get(0).getLeft();
+                    phraseExpr = buildSpacedValueQuery(field, text, false, true);
+                    break;
+                case "endswith":
+                    text = parts.get(1).getLeft();
+                    phraseExpr = buildSpacedValueQuery(field, text, true, false);
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected spaced phrase shape: " + spacedShape);
+            }
+            if (applyDeMorgans) {
+                return this.notToken + " " + phraseExpr;
+            }
+            return phraseExpr;
+        }
+
+        String expr = "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
+        String exprWithDeMorgansApplied = this.notToken + " " + "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
+
         String convertedExpr = String.format(Locale.getDefault(), expr, field, this.convertValueStr(value));
         if (applyDeMorgans) {
             convertedExpr = String.format(Locale.getDefault(), exprWithDeMorgansApplied, field, this.convertValueStr(value));
@@ -505,6 +539,104 @@ public class OSQueryBackend extends QueryBackend {
 
     private Object convertConditionGroup(ConditionType condition, boolean isConditionNot, boolean applyDeMorgans) throws SigmaValueError {
         return String.format(Locale.getDefault(), groupExpression, this.convertCondition(condition, isConditionNot, applyDeMorgans));
+    }
+
+    /**
+     * Returns "contains", "startswith", or "endswith" when the value is a simple wildcard pattern
+     * whose text segment contains a space; returns null otherwise (single-word wildcards pass through).
+     */
+    private String spacedPhraseShape(SigmaString value) {
+        var parts = value.getsOpt();
+        if (parts.size() == 3
+                && parts.get(0).isMiddle() && parts.get(0).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI
+                && parts.get(1).isLeft() && parts.get(1).getLeft().contains(" ")
+                && parts.get(2).isMiddle() && parts.get(2).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI) {
+            return "contains";
+        }
+        if (parts.size() == 2
+                && parts.get(0).isLeft() && parts.get(0).getLeft().contains(" ")
+                && parts.get(1).isMiddle() && parts.get(1).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI) {
+            return "startswith";
+        }
+        if (parts.size() == 2
+                && parts.get(0).isMiddle() && parts.get(0).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI
+                && parts.get(1).isLeft() && parts.get(1).getLeft().contains(" ")) {
+            return "endswith";
+        }
+        return null;
+    }
+
+    /**
+     * Emits a quoted phrase query for spaced values. Single-group (pure-whitespace) values are
+     * emitted as a deduplicated phrase; mixed-separator values are emitted as one quoted phrase of
+     * the full text (the rule_analyzer keyword tokenizer indexes the value as a single token).
+     *
+     * @param leadingWildcard  prepend {@code *} — true for contains/endswith
+     * @param trailingWildcard append {@code *} — true for contains/startswith
+     */
+    private String buildSpacedValueQuery(String field, String text, boolean leadingWildcard, boolean trailingWildcard) {
+        // Collect alphanumeric tokens into phrase groups; flush on any non-space separator.
+        // Lowercase tokens when adding (matching the rule_analyzer), but iterate over original text.
+        List<List<String>> groups = new ArrayList<>();
+        List<String> currentGroup = new ArrayList<>();
+        int len = text.length();
+        int i = 0;
+        while (i < len) {
+            int tokenStart = i;
+            while (i < len && Character.isLetterOrDigit(text.charAt(i))) {
+                i++;
+            }
+            if (i > tokenStart) {
+                currentGroup.add(text.substring(tokenStart, i).toLowerCase(Locale.ROOT));
+            }
+
+            if (i >= len) {
+                break;
+            }
+
+            int sepStart = i;
+            while (i < len && !Character.isLetterOrDigit(text.charAt(i))) {
+                i++;
+            }
+            String sep = text.substring(sepStart, i);
+
+            boolean whiteSpaceOnly = sep.trim().isEmpty() && !sep.isEmpty();
+
+            if (!whiteSpaceOnly) {
+                // Non-space separator: flush the current phrase group.
+                if (!currentGroup.isEmpty()) {
+                    groups.add(new ArrayList<>(currentGroup));
+                    currentGroup.clear();
+                }
+            }
+        }
+        if (!currentGroup.isEmpty()) {
+            groups.add(new ArrayList<>(currentGroup));
+        }
+
+        // Mixed-separator / non-alphanumeric fallback: emit one quoted phrase (escaped spaces in a
+        // bare wildcard term are invalid query_string syntax; the keyword analyzer indexes the value
+        // as a single token, so a phrase matches it exactly). Trailing * gives startswith prefix.
+        if (groups.size() != 1) {
+            String phraseSuffix = (trailingWildcard && !leadingWildcard) ? "*" : "";
+            return field + this.eqToken + " \"" + text + "\"" + phraseSuffix;
+        }
+
+        // Single phrase group: deduplicate tokens and emit as a phrase clause.
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (List<String> group : groups) {
+            seen.add(group.size() == 1 ? group.get(0) : "\"" + String.join(" ", group) + "\"");
+        }
+        List<String> clauses = new ArrayList<>(seen);
+
+        // Append * for startswith only; contains/endswith match anywhere via phrase.
+        String clause = clauses.get(0);
+        String phraseSuffix = (trailingWildcard && !leadingWildcard) ? "*" : "";
+        if (clause.startsWith("\"")) {
+            return field + this.eqToken + " " + clause + phraseSuffix;
+        } else {
+            return field + this.eqToken + " \"" + clause + "\"" + phraseSuffix;
+        }
     }
 
     private Object convertValueStr(SigmaString s) throws SigmaValueError {

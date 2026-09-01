@@ -1621,7 +1621,6 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
         }
 
         private void resolveRuleFieldNamesAndUpsertMonitorFromQueries(List<Pair<String, Rule>> queries, Detector detector, String logIndex, ActionListener<List<IndexMonitorResponse>> listener) {
-            logger.error("PERF_DEBUG_SAP: Fetching alias path pairs to construct rule_field_names");
             long start = System.currentTimeMillis();
             Set<String> ruleFieldNames = new HashSet<>();
             for (Pair<String, Rule> query : queries) {
