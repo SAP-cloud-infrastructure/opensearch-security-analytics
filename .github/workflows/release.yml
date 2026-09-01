@@ -103,16 +103,28 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Publish common-utils to local Maven repository
+      - name: Install common-utils jar into local Maven repository
         if: steps.params.outputs.common_utils_qualifier != 'official'
         run: |
-          CU_TAG="${{ steps.params.outputs.opensearch_version }}.0-${{ steps.params.outputs.common_utils_qualifier }}"
-          git clone --depth 1 --branch "${CU_TAG}" \
-            https://github.com/SAP-cloud-infrastructure/opensearch-common-utils.git /tmp/common-utils
-          cd /tmp/common-utils
-          ./gradlew publishToMavenLocal \
-            -Dbuild.snapshot=false \
-            -Dbuild.version_qualifier="${{ steps.params.outputs.common_utils_qualifier }}"
+          CU_VERSION="${{ steps.params.outputs.opensearch_version }}.0-${{ steps.params.outputs.common_utils_qualifier }}"
+          CU_TAG="${CU_VERSION}"
+          mkdir -p /tmp/common-utils
+          # Download whichever common-utils jar is attached to the release
+          # (asset naming has varied across releases, e.g. with/without qualifier suffix)
+          gh release download "${CU_TAG}" \
+            --repo "SAP-cloud-infrastructure/opensearch-common-utils" \
+            --pattern "common-utils-*.jar" \
+            --dir /tmp/common-utils
+          CU_JAR=$(ls /tmp/common-utils/common-utils-*.jar | head -1)
+          mvn install:install-file \
+            -Dfile="${CU_JAR}" \
+            -DgroupId=org.opensearch \
+            -DartifactId=common-utils \
+            -Dversion="${CU_VERSION}" \
+            -Dpackaging=jar \
+            -DgeneratePom=true
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Build plugin zip (official common-utils)
         if: steps.params.outputs.common_utils_qualifier == 'official'
