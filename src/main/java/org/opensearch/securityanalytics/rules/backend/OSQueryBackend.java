@@ -291,11 +291,41 @@ public class OSQueryBackend extends QueryBackend {
     public Object convertConditionFieldEqValStr(ConditionFieldEqualsValueExpression condition, boolean applyDeMorgans) throws SigmaValueError {
         SigmaString value = (SigmaString) condition.getValue();
         boolean containsWildcard = value.containsWildcard();
-        String expr = "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
-        String exprWithDeMorgansApplied = this.notToken + " " + "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
 
         String field = getFinalField(condition.getField());
         ruleQueryFields.put(field, Map.of("type", "text", "analyzer", "rule_analyzer"));
+
+        // Use phrase query syntax for spaced values — escaped-space wildcards fail on analyzed text.
+        String spacedShape = spacedPhraseShape(value);
+        if (spacedShape != null) {
+            var parts = value.getsOpt();
+            String text;
+            String phraseExpr;
+            switch (spacedShape) {
+                case "contains":
+                    text = parts.get(1).getLeft();
+                    phraseExpr = field + this.eqToken + " \"" + text + "\"";
+                    break;
+                case "startswith":
+                    text = parts.get(0).getLeft();
+                    phraseExpr = field + this.eqToken + " \"" + text + "\"*";
+                    break;
+                case "endswith":
+                    text = parts.get(1).getLeft();
+                    phraseExpr = field + this.eqToken + " \"" + text + "\"";
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected spaced phrase shape: " + spacedShape);
+            }
+            if (applyDeMorgans) {
+                return this.notToken + " " + phraseExpr;
+            }
+            return phraseExpr;
+        }
+
+        String expr = "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
+        String exprWithDeMorgansApplied = this.notToken + " " + "%s" + this.eqToken + " " + (containsWildcard? this.reQuote: this.strQuote) + "%s" + (containsWildcard? this.reQuote: this.strQuote);
+
         String convertedExpr = String.format(Locale.getDefault(), expr, field, this.convertValueStr(value));
         if (applyDeMorgans) {
             convertedExpr = String.format(Locale.getDefault(), exprWithDeMorgansApplied, field, this.convertValueStr(value));
@@ -505,6 +535,31 @@ public class OSQueryBackend extends QueryBackend {
 
     private Object convertConditionGroup(ConditionType condition, boolean isConditionNot, boolean applyDeMorgans) throws SigmaValueError {
         return String.format(Locale.getDefault(), groupExpression, this.convertCondition(condition, isConditionNot, applyDeMorgans));
+    }
+
+    /**
+     * Returns "contains", "startswith", or "endswith" when the value is a simple wildcard pattern
+     * whose text segment contains a space; returns null otherwise (single-word wildcards pass through).
+     */
+    private String spacedPhraseShape(SigmaString value) {
+        var parts = value.getsOpt();
+        if (parts.size() == 3
+                && parts.get(0).isMiddle() && parts.get(0).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI
+                && parts.get(1).isLeft() && parts.get(1).getLeft().contains(" ")
+                && parts.get(2).isMiddle() && parts.get(2).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI) {
+            return "contains";
+        }
+        if (parts.size() == 2
+                && parts.get(0).isLeft() && parts.get(0).getLeft().contains(" ")
+                && parts.get(1).isMiddle() && parts.get(1).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI) {
+            return "startswith";
+        }
+        if (parts.size() == 2
+                && parts.get(0).isMiddle() && parts.get(0).getMiddle() == SigmaString.SpecialChars.WILDCARD_MULTI
+                && parts.get(1).isLeft() && parts.get(1).getLeft().contains(" ")) {
+            return "endswith";
+        }
+        return null;
     }
 
     private Object convertValueStr(SigmaString s) throws SigmaValueError {
