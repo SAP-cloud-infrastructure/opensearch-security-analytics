@@ -137,6 +137,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
     private static final Logger log = LogManager.getLogger(TransportIndexDetectorAction.class);
     public static final String TIMESTAMP_FIELD_ALIAS = "timestamp";
     public static final String CHAINED_FINDINGS_MONITOR_STRING = "chained_findings_monitor";
+    public static final boolean CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN = false;
 
     private final Client client;
 
@@ -905,7 +906,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                         detector.getAlertsHistoryIndex(),
                         detector.getAlertsHistoryIndexPattern(),
                         DetectorMonitorConfig.getRuleIndexMappingsByType(),
-                        true), enableDetectorWithDedicatedQueryIndices, true, PLUGIN_OWNER_FIELD, null, null);
+                        true), enableDetectorWithDedicatedQueryIndices, CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN, PLUGIN_OWNER_FIELD, null, null);
 
         return new IndexMonitorRequest(monitorId, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, restMethod, monitor, null);
     }
