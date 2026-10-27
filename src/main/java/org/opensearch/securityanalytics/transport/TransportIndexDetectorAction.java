@@ -142,6 +142,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
     // Persistent thread-context header the security plugin uses to carry the authenticated user;
     // read by the resource-sharing ResourceIndexListener to record resource ownership.
     private static final String RESOURCE_SHARING_AUTHENTICATED_USER_HEADER = "_opendistro_security_authenticated_user";
+    public static final boolean CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN = false;
 
     private final Client client;
 
@@ -916,7 +917,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                         detector.getAlertsHistoryIndex(),
                         detector.getAlertsHistoryIndexPattern(),
                         DetectorMonitorConfig.getRuleIndexMappingsByType(),
-                        true), enableDetectorWithDedicatedQueryIndices, true, PLUGIN_OWNER_FIELD, null, null);
+                        true), enableDetectorWithDedicatedQueryIndices, CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN, PLUGIN_OWNER_FIELD, null, null);
 
         return new IndexMonitorRequest(monitorId, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, restMethod, monitor, null);
     }
