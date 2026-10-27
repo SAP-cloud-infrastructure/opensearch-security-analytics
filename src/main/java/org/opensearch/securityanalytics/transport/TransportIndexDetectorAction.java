@@ -1907,7 +1907,13 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
     private Map<String, String> extractFieldTypes(String indexName) {
         Map<String, String> fieldTypes = new HashMap<>();
         try {
-            IndexMetadata indexMetadata = clusterService.state().metadata().index(indexName);
+            String concreteIndex = IndexUtils.getNewIndexByCreationDate(
+                    clusterService.state(), indexNameExpressionResolver, indexName
+            );
+            if (concreteIndex == null) {
+                concreteIndex = indexName;
+            }
+            IndexMetadata indexMetadata = clusterService.state().metadata().index(concreteIndex);
             if (indexMetadata == null) return fieldTypes;
             MappingMetadata mappingMetadata = indexMetadata.mapping();
             if (mappingMetadata == null) return fieldTypes;
