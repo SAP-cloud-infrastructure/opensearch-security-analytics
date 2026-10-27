@@ -138,6 +138,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
     public static final String TIMESTAMP_FIELD_ALIAS = "timestamp";
     public static final String CHAINED_FINDINGS_MONITOR_STRING = "chained_findings_monitor";
     public static final boolean CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN = false;
+    public static final boolean CHAINED_FINDINGS_SHOULD_CREATE_SINGLE_ALERT_FOR_FINDINGS = true;
 
     private final Client client;
 
@@ -846,12 +847,29 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
      * Creates doc level monitor which generates per document alerts for the findings of the bucket level delegate monitors in a workflow.
      * This monitor has match all query applied to generate the alerts per each finding doc.
      */
-    private IndexMonitorRequest createDocLevelMonitorMatchAllRequest(
+    IndexMonitorRequest createDocLevelMonitorMatchAllRequest(
             Detector detector,
             RefreshPolicy refreshPolicy,
             String monitorId,
             Method restMethod,
             List<Pair<String, Rule>> queries) {
+        return createDocLevelMonitorMatchAllRequest(
+                detector,
+                refreshPolicy,
+                monitorId,
+                restMethod,
+                queries,
+                enableDetectorWithDedicatedQueryIndices
+        );
+    }
+
+    static IndexMonitorRequest createDocLevelMonitorMatchAllRequest(
+            Detector detector,
+            RefreshPolicy refreshPolicy,
+            String monitorId,
+            Method restMethod,
+            List<Pair<String, Rule>> queries,
+            boolean enableDetectorWithDedicatedQueryIndices) {
         List<DocLevelMonitorInput> docLevelMonitorInputs = new ArrayList<>();
         List<DocLevelQuery> docLevelQueries = new ArrayList<>();
         String monitorName = detector.getName() + "_chained_findings";
@@ -906,7 +924,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                         detector.getAlertsHistoryIndex(),
                         detector.getAlertsHistoryIndexPattern(),
                         DetectorMonitorConfig.getRuleIndexMappingsByType(),
-                        true), enableDetectorWithDedicatedQueryIndices, CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN, PLUGIN_OWNER_FIELD, null, null);
+                        true), CHAINED_FINDINGS_DELETE_QUERY_INDEX_IN_EVERY_RUN, CHAINED_FINDINGS_SHOULD_CREATE_SINGLE_ALERT_FOR_FINDINGS, PLUGIN_OWNER_FIELD, null, null);
 
         return new IndexMonitorRequest(monitorId, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, restMethod, monitor, null);
     }
