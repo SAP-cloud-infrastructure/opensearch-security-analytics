@@ -254,7 +254,7 @@ dependencies {
     testImplementation "tools.jackson.core:jackson-databind:${versions.jackson3_databind}"
 
     // Resource sharing
-    compileOnly group: 'org.opensearch', name:'opensearch-security-spi', version:"${opensearch_build}"
+    compileOnly group: 'org.opensearch', name:'opensearch-security-spi', version:"${upstream_build}"
     // Needed for security tests
     if (securityEnabled) {
         opensearchPlugin "org.opensearch.plugin:opensearch-security:${upstream_build}@zip"
